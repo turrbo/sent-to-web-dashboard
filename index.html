@@ -222,7 +222,9 @@ function daysUntil(d) {
 }
 
 function getFRName(fr) { if(!fr) return 'Unknown'; const m = fr.match(/^([^(]+)/); return m ? m[1].trim() : fr; }
+function getFirstName(fr) { return getFRName(fr).split(/\s+/)[0]; }
 function getFRId(fr) { if(!fr) return ''; const m = fr.match(/\((\d+)\)/); return m ? m[1] : ''; }
+function groupByFR(cases) { const map = {}; cases.forEach(c => { const key = c.frAssigned||'Unknown'; if(!map[key]) map[key]=[]; map[key].push(c); }); return map; }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 function processFile(file) {
@@ -282,33 +284,66 @@ function renderTable() {
   }).join('');
 }
 
-function genTextReminder(c) {
-  const fr = getFRName(c.frAssigned);
-  let urg = '';
-  if(c.daysUntilDue!==null && c.daysUntilDue<0) urg = `OVERDUE by ${Math.abs(c.daysUntilDue)} day(s). `;
-  else if(c.daysUntilDue!==null && c.daysUntilDue<=5) urg = `Due in ${c.daysUntilDue} day(s). `;
-  return `Hi ${fr},\n\nThis is a reminder regarding Control #${c.controlNum} (${c.surveyType}) for ${c.customerName}.\n\n${urg}This case was sent to the web on ${c.dateSubmitted} and needs to be submitted to QA as soon as possible.\n\nCustomer Due Date: ${c.customerDueDateStr}\nAddress: ${c.address}, ${c.city}, ${c.state} ${c.zip}\nField Status: ${c.fieldStatus}\n\nPlease complete and submit this case to QA at your earliest convenience.\n\nThank you.`;
+function genTextReminder(frCases) {
+  const firstName = getFirstName(frCases[0].frAssigned);
+  let msg = `Hi ${firstName},\n\nThis is a reminder regarding the following case${frCases.length>1?'s':''} that ${frCases.length>1?'were':'was'} sent to the web and still need${frCases.length>1?'':'s'} to be submitted to QA.\n`;
+  frCases.forEach((c,i) => {
+    msg += `\n${frCases.length>1?(i+1)+'. ':''}Control #${c.controlNum} (${c.surveyType}) - ${c.customerName}`;
+    msg += `\n   Address: ${c.address}, ${c.city}, ${c.state} ${c.zip}`;
+    msg += `\n   Date Submitted to Web: ${c.dateSubmitted}`;
+    msg += `\n   Field Status: ${c.fieldStatus}`;
+    if(c.daysUntilDue!==null && c.daysUntilDue<0) msg += `\n   ** OVERDUE by ${Math.abs(c.daysUntilDue)} day(s) **`;
+    else if(c.daysUntilDue!==null && c.daysUntilDue<=5) msg += `\n   ** Due in ${c.daysUntilDue} day(s) **`;
+    msg += '\n';
+  });
+  msg += `\nPlease complete and submit ${frCases.length>1?'these cases':'this case'} to QA at your earliest convenience.\n\nThank you.`;
+  return msg;
 }
 
-function genEmail(c) {
-  const fr = getFRName(c.frAssigned);
+function genEmail(frCases) {
+  const firstName = getFirstName(frCases[0].frAssigned);
+  const hasOverdue = frCases.some(c => c.daysUntilDue!==null && c.daysUntilDue<0);
+  const hasUrgent = frCases.some(c => c.daysUntilDue!==null && c.daysUntilDue<=5);
+  const controlNums = frCases.map(c => '#'+c.controlNum).join(', ');
   let prefix = 'Reminder';
-  if(c.daysUntilDue!==null && c.daysUntilDue<0) prefix='URGENT - OVERDUE';
-  else if(c.daysUntilDue!==null && c.daysUntilDue<=5) prefix='URGENT';
-  const subject = `${prefix}: Control #${c.controlNum} - Submit to QA (Due: ${c.customerDueDateStr})`;
+  if(hasOverdue) prefix='URGENT - OVERDUE';
+  else if(hasUrgent) prefix='URGENT';
+  const subject = `${prefix}: ${frCases.length>1?frCases.length+' Cases':'Control '+controlNums} - Submit to QA`;
   let urgP = '';
-  if(c.daysUntilDue!==null && c.daysUntilDue<0) urgP=`\nIMPORTANT: This case is now OVERDUE by ${Math.abs(c.daysUntilDue)} day(s). Immediate action is required.\n`;
-  else if(c.daysUntilDue!==null && c.daysUntilDue<=5) urgP=`\nIMPORTANT: This case is due in ${c.daysUntilDue} day(s). Please prioritize accordingly.\n`;
-  const body = `Hi ${fr},\n\nI hope this message finds you well. I am writing to follow up on the case below that was sent to the web and still needs to be submitted to QA for payment processing.\n${urgP}\nCase Details:\n- Control #: ${c.controlNum}\n- Customer: ${c.customerName}\n- Survey Type: ${c.surveyType}\n- Date Ordered: ${c.dateOrdered}\n- Date Submitted to Web: ${c.dateSubmitted}\n- Customer Due Date: ${c.customerDueDateStr}\n- Property Address: ${c.address}, ${c.city}, ${c.state} ${c.zip}\n- Field Status: ${c.fieldStatus}\n- Last Contact: ${c.dateLastContacted}${c.appointmentDate?'\n- Appointment Date: '+c.appointmentDate:''}\n\nSince this case was sent to the web, it has not yet been submitted for payment. Please complete your review and submit to QA at your earliest convenience so we can proceed with payment processing.\n\nIf you have any questions or need assistance, please don't hesitate to reach out.\n\nThank you for your prompt attention to this matter.\n\nBest regards`;
+  if(hasOverdue) urgP=`\nIMPORTANT: One or more of these cases is OVERDUE. Immediate action is required.\n`;
+  else if(hasUrgent) urgP=`\nIMPORTANT: One or more of these cases is due soon. Please prioritize accordingly.\n`;
+  let body = `Hi ${firstName},\n\nI hope this message finds you well. I am writing to follow up on ${frCases.length>1?'the following cases that were':'the case below that was'} sent to the web and still need${frCases.length>1?'':'s'} to be submitted to QA for payment processing.\n${urgP}`;
+  frCases.forEach((c,i) => {
+    body += `\n${frCases.length>1?'Case '+(i+1)+':\n':'Case Details:\n'}`;
+    body += `- Control #: ${c.controlNum}\n`;
+    body += `- Customer: ${c.customerName}\n`;
+    body += `- Survey Type: ${c.surveyType}\n`;
+    body += `- Date Ordered: ${c.dateOrdered}\n`;
+    body += `- Date Submitted to Web: ${c.dateSubmitted}\n`;
+    body += `- Property Address: ${c.address}, ${c.city}, ${c.state} ${c.zip}\n`;
+    body += `- Field Status: ${c.fieldStatus}\n`;
+    body += `- Last Contact: ${c.dateLastContacted}`;
+    if(c.appointmentDate) body += `\n- Appointment Date: ${c.appointmentDate}`;
+    if(c.daysUntilDue!==null && c.daysUntilDue<0) body += `\n- ** OVERDUE by ${Math.abs(c.daysUntilDue)} day(s) **`;
+    else if(c.daysUntilDue!==null && c.daysUntilDue<=5) body += `\n- ** Due in ${c.daysUntilDue} day(s) **`;
+    body += '\n';
+  });
+  body += `\nSince ${frCases.length>1?'these cases were':'this case was'} sent to the web, ${frCases.length>1?'they have':'it has'} not yet been submitted for payment. Please complete your review and submit to QA at your earliest convenience so we can proceed with payment processing.\n\nIf you have any questions or need assistance, please don't hesitate to reach out.\n\nThank you for your prompt attention to this matter.\n\nBest regards`;
   return {subject, body};
 }
 
 function renderText() {
   const el = document.getElementById('panelText');
-  let html = '<div class="reminder-panel"><h3>Text Message Reminders</h3><p>Auto-generated text reminders for each field rep regarding their pending QA submissions.</p>';
-  cases.forEach((c,i) => {
-    const badge = c.urgency==='overdue'?'<span class="status-badge overdue" style="margin-left:8px">Overdue</span>':(c.urgency==='urgent'||c.urgency==='soon')?'<span class="status-badge received" style="margin-left:8px">Due Soon</span>':'';
-    html += `<div class="reminder-card"><div class="reminder-header"><span class="reminder-to"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> ${esc(getFRName(c.frAssigned))} -- Control #${esc(String(c.controlNum))}${badge}</span><button class="btn btn-outline btn-sm" onclick="copyText(${i},'reminder')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy</button></div><div class="reminder-body">${esc(genTextReminder(c))}</div></div>`;
+  const grouped = groupByFR(cases);
+  const frKeys = Object.keys(grouped);
+  let html = '<div class="reminder-panel"><h3>Text Message Reminders</h3><p>Auto-generated text reminders grouped by field rep. One message per rep with all their pending cases.</p>';
+  frKeys.forEach((frKey,i) => {
+    const frCases = grouped[frKey];
+    const hasOverdue = frCases.some(c => c.urgency==='overdue');
+    const hasSoon = frCases.some(c => c.urgency==='urgent'||c.urgency==='soon');
+    const badge = hasOverdue?'<span class="status-badge overdue" style="margin-left:8px">Overdue</span>':hasSoon?'<span class="status-badge received" style="margin-left:8px">Due Soon</span>':'';
+    const controlNums = frCases.map(c => '#'+c.controlNum).join(', ');
+    html += `<div class="reminder-card"><div class="reminder-header"><span class="reminder-to"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> ${esc(getFRName(frKey))} -- ${frCases.length} case${frCases.length>1?'s':''} (${esc(controlNums)})${badge}</span><button class="btn btn-outline btn-sm" onclick="copyFRText(${i},'reminder')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy</button></div><div class="reminder-body">${esc(genTextReminder(frCases))}</div></div>`;
   });
   html += '<div class="action-bar"><button class="btn btn-primary" onclick="copyAllReminders()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy All Reminders</button></div></div>';
   el.innerHTML = html;
@@ -316,11 +351,16 @@ function renderText() {
 
 function renderEmails() {
   const el = document.getElementById('panelEmail');
-  let html = '<div class="email-panel"><h3>Email Drafts</h3><p>Auto-generated emails for each case that needs to be submitted to QA for payment processing.</p>';
-  cases.forEach((c,i) => {
-    const email = genEmail(c);
-    const badge = c.urgency==='overdue'?'<span class="status-badge overdue" style="margin-left:12px">Overdue</span>':(c.urgency==='urgent'||c.urgency==='soon')?'<span class="status-badge received" style="margin-left:12px">Due Soon</span>':'';
-    html += `<div class="email-card"><div class="email-header"><div class="email-meta"><strong>To:</strong> ${esc(getFRName(c.frAssigned))} (${esc(getFRId(c.frAssigned))})${badge}</div><button class="btn btn-outline btn-sm" onclick="copyText(${i},'email')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy</button></div><div class="email-subject">Subject: ${esc(email.subject)}</div><div class="email-body">${esc(email.body)}</div></div>`;
+  const grouped = groupByFR(cases);
+  const frKeys = Object.keys(grouped);
+  let html = '<div class="email-panel"><h3>Email Drafts</h3><p>Auto-generated emails grouped by field rep. One email per rep with all their pending cases.</p>';
+  frKeys.forEach((frKey,i) => {
+    const frCases = grouped[frKey];
+    const email = genEmail(frCases);
+    const hasOverdue = frCases.some(c => c.urgency==='overdue');
+    const hasSoon = frCases.some(c => c.urgency==='urgent'||c.urgency==='soon');
+    const badge = hasOverdue?'<span class="status-badge overdue" style="margin-left:12px">Overdue</span>':hasSoon?'<span class="status-badge received" style="margin-left:12px">Due Soon</span>':'';
+    html += `<div class="email-card"><div class="email-header"><div class="email-meta"><strong>To:</strong> ${esc(getFRName(frKey))} (${esc(getFRId(frKey))}) -- ${frCases.length} case${frCases.length>1?'s':''}${badge}</div><button class="btn btn-outline btn-sm" onclick="copyFRText(${i},'email')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy</button></div><div class="email-subject">Subject: ${esc(email.subject)}</div><div class="email-body">${esc(email.body)}</div></div>`;
   });
   html += '<div class="action-bar"><button class="btn btn-primary" onclick="copyAllEmails()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy All Emails</button></div></div>';
   el.innerHTML = html;
@@ -341,21 +381,25 @@ function showToast(msg) {
   t._timer = setTimeout(() => t.classList.add('hidden'), 2500);
 }
 
-function copyText(idx, type) {
-  const c = cases[idx];
+function copyFRText(frIdx, type) {
+  const grouped = groupByFR(cases);
+  const frKeys = Object.keys(grouped);
+  const frCases = grouped[frKeys[frIdx]];
   let text;
-  if(type==='reminder') text = genTextReminder(c);
-  else { const e = genEmail(c); text = `Subject: ${e.subject}\n\n${e.body}`; }
+  if(type==='reminder') text = genTextReminder(frCases);
+  else { const e = genEmail(frCases); text = `Subject: ${e.subject}\n\n${e.body}`; }
   navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
 }
 
 function copyAllReminders() {
-  const all = cases.map(c => genTextReminder(c)).join('\n\n---\n\n');
+  const grouped = groupByFR(cases);
+  const all = Object.values(grouped).map(frCases => genTextReminder(frCases)).join('\n\n---\n\n');
   navigator.clipboard.writeText(all).then(() => showToast('All reminders copied'));
 }
 
 function copyAllEmails() {
-  const all = cases.map(c => { const e = genEmail(c); return `Subject: ${e.subject}\n\n${e.body}`; }).join('\n\n========================================\n\n');
+  const grouped = groupByFR(cases);
+  const all = Object.values(grouped).map(frCases => { const e = genEmail(frCases); return `Subject: ${e.subject}\n\n${e.body}`; }).join('\n\n========================================\n\n');
   navigator.clipboard.writeText(all).then(() => showToast('All emails copied'));
 }
 </script>
